@@ -2,55 +2,37 @@ from pydantic import BaseModel, Field
 from typing import Optional, Dict, Any, List
 from datetime import datetime
 
-class ProductRegisterRequest(BaseModel):
-    farmer_id: str  # MongoDB user_id comme string
+# --- Schémas utilisés par l'API ---
+
+class ProductTraceRequest(BaseModel):
+    """Schéma pour la création d'une trace (Entrée API)"""
+    farmer_phone: str
     product_name: str
-    crop_type: str = Field(..., description="Cacao, Anacarde, Manioc, etc.")
+    product_type: str
     quantity: float
     location: Optional[str] = None
     harvest_date: Optional[datetime] = None
-    product_ref: Optional[str] = None  # Référence à un document produit existant
-    additional_data: Optional[Dict[str, Any]] = {}
-
-class ProductRegisterResponse(BaseModel):
-    success: bool
-    product_id: int  # blockchain_product_id
-    ipfs_cid: str
-    tx_hash: Optional[str] = None
-    block_number: Optional[int] = None
-    ipfs_url: str
-    mongo_id: Optional[str] = None
-    message: Optional[str] = None
 
 class ProductTraceResponse(BaseModel):
-    _id: str
-    farmer_id: str
-    blockchain_product_id: int
-    ipfs_cid: str
-    tx_hash: Optional[str]
-    block_number: Optional[int]
-    metadata: Dict[str, Any]
-    status: str
+    """Schéma pour la réponse d'une trace (Sortie API)"""
+    id: str
+    farmer_phone: Optional[str] = None
+    product_name: Optional[str] = None
+    product_type: Optional[str] = None
+    quantity: Optional[float] = None
+    location: Optional[str] = None
+    harvest_date: Optional[datetime] = None
     created_at: datetime
-    updated_at: datetime
+
+class FarmerTracesResponse(BaseModel):
+    """Schéma pour la liste des traces d'un fermier"""
+    farmer_phone: str
+    total_traces: int
+    traces: List[ProductTraceResponse]
 
 class BlockchainStatus(BaseModel):
-    connected: bool
-    network: str
-    contract_address: str
-    account_balance: str
-    last_block: int
-    traces_in_db: int = 0
-
-class BlockchainVerification(BaseModel):
-    exists: bool
-    farmer_address: Optional[str] = None
-    ipfs_cid: Optional[str] = None
-    timestamp: Optional[int] = None
-    ipfs_url: Optional[str] = None
-    verified_at: str
-
-class TraceWithVerification(BaseModel):
-    mongo_data: Optional[ProductTraceResponse] = None
-    blockchain_verification: BlockchainVerification
-    consistency_check: bool
+    """Schéma pour le statut du système"""
+    database: str
+    collection: str
+    total_traces: int
+    status: str

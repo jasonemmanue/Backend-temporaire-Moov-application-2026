@@ -42,6 +42,12 @@ class UserBase(BaseModel):
     profile_picture: Optional[str] = None
     language: str = "fr"
 
+    class Config:
+        # C'est la ligne magique qui corrige l'erreur 500 avec MongoDB
+        use_enum_values = True
+        populate_by_name = True
+        arbitrary_types_allowed = True
+
 class UserCreate(UserBase):
     password: Optional[str] = None  # Pour futur authentification par mot de passe
 
@@ -67,6 +73,7 @@ class UserInDB(UserBase):
         populate_by_name = True
         arbitrary_types_allowed = True
         json_encoders = {ObjectId: str}
+        use_enum_values = True
 
 class UserResponse(UserBase):
     id: str = Field(..., alias="_id")
@@ -80,3 +87,4 @@ class UserResponse(UserBase):
     class Config:
         populate_by_name = True
         json_encoders = {ObjectId: str}
+        use_enum_values = True

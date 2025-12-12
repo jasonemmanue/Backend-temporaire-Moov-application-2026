@@ -1,8 +1,13 @@
 from fastapi import APIRouter, Depends, HTTPException
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from app.database import get_database
-from app.models.blockchain import ProductTraceCreate, ProductTraceResponse
-from app.schemas.blockchain import ProductTraceRequest, FarmerTracesResponse, BlockchainStatus
+# CORRECTION : On importe les schémas corrects depuis app.schemas
+from app.schemas.blockchain import (
+    ProductTraceRequest, 
+    ProductTraceResponse, 
+    FarmerTracesResponse, 
+    BlockchainStatus
+)
 import logging
 from datetime import datetime
 from bson import ObjectId

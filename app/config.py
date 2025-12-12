@@ -1,53 +1,41 @@
 # app/config.py
-import os
-from dotenv import load_dotenv
-
-load_dotenv()
-
-class Settings:
-    # MongoDB
-    MONGODB_URL = os.getenv("MONGODB_URL", "mongodb://localhost:27017")
-    MONGODB_DATABASE = os.getenv("MONGODB_DATABASE", "agrismart_db")
-    
-    # JWT
-    SECRET_KEY = os.getenv("SECRET_KEY", "default-secret-key-change-me-please")
-    ALGORITHM = os.getenv("ALGORITHM", "HS256")
-    ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "10080"))
-    
-    # OTP
-    OTP_EXPIRE_MINUTES = int(os.getenv("OTP_EXPIRE_MINUTES", "5"))
-    OTP_LENGTH = int(os.getenv("OTP_LENGTH", "6"))
-    
-    # Africa's Talking
-    AT_USERNAME = os.getenv("AT_USERNAME", "sandbox")
-    AT_API_KEY = os.getenv("AT_API_KEY", "atsk_71a80459847ba3976087282ab3692c025a75278fe72d39adb755ba6f86e5a757fffeb164")
-    AT_SENDER_ID = os.getenv("AT_SENDER_ID", "AGRISMART_CI")
-    
-    @classmethod
-    def validate(cls):
-        """Valider la configuration"""
-        required = ["MONGODB_URL", "SECRET_KEY", "AT_USERNAME", "AT_API_KEY"]
-        missing = [var for var in required if not getattr(cls, var)]
-        if missing:
-            raise ValueError(f"Variables manquantes dans .env: {missing}")
-
-settings = Settings()
-
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
+from typing import Optional
 
 class Settings(BaseSettings):
-    # ... (tes variables existantes)
+    # --- Base de données ---
+    MONGODB_URL: str
+    MONGODB_DATABASE: str
     
-    # Blockchain
-    polygon_rpc_url: str = ""
-    contract_address: str = ""
-    private_key: str = ""  # Dev seulement
-    chain_id: int = 80001
-    
-    # IPFS
-    web3_storage_token: str = ""
-    
-    class Config:
-        env_file = ".env"
+    # Redis (Optionnel, on met une valeur par défaut ou Optional)
+    REDIS_URL: Optional[str] = None
+
+    # --- Sécurité & JWT ---
+    SECRET_KEY: str
+    ALGORITHM: str = "HS256"
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 10080
+
+    # --- Africa's Talking (SMS) ---
+    AT_USERNAME: str = "sandbox"
+    AT_API_KEY: str
+    AT_SENDER_ID: str = "AGRISMART_CI"
+
+    # --- OTP ---
+    OTP_EXPIRE_MINUTES: int = 5
+    OTP_LENGTH: int = 6
+
+    # --- Blockchain (Optionnel pour le démarrage si pas dans .env) ---
+    POLYGON_RPC_URL: Optional[str] = None
+    CONTRACT_ADDRESS: Optional[str] = None
+    PRIVATE_KEY: Optional[str] = None
+    CHAIN_ID: Optional[int] = 80002
+    WEB3_STORAGE_TOKEN: Optional[str] = None
+
+    # Configuration Pydantic V2
+    model_config = SettingsConfigDict(
+        env_file=".env", 
+        case_sensitive=False,  # Permet MONGODB_URL ou mongodb_url
+        extra="ignore"         # IMPORTANT: Ignore les variables du .env qui ne sont pas déclarées ici (évite le crash)
+    )
 
 settings = Settings()
