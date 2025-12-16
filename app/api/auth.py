@@ -74,7 +74,10 @@ async def register(request: RegisterRequest, db: AsyncIOMotorDatabase = Depends(
             detail=f"Erreur serveur: {str(e)}"
         )
 
-@router.post("/verify-otp", response_model=TokenResponse)
+# ============================================================================
+# 🔥 MODIFIÉ : Retourner le token + les données utilisateur (user_type inclus)
+# ============================================================================
+@router.post("/verify-otp")
 async def verify_otp_code(request: VerifyOTPRequest, db: AsyncIOMotorDatabase = Depends(get_database)):
     """Vérification du code OTP et connexion"""
     
@@ -105,10 +108,25 @@ async def verify_otp_code(request: VerifyOTPRequest, db: AsyncIOMotorDatabase = 
         )
     
     # 3. Créer le token JWT
-    # On convertit l'ObjectId en string pour le token
     access_token = create_access_token(data={"sub": str(user["_id"])})
     
-    return TokenResponse(access_token=access_token)
+    # ===== MODIFICATION : Préparer les données utilisateur pour le retour =====
+    # Convertir l'ObjectId en string pour la sérialisation JSON
+    user["_id"] = str(user["_id"])
+    
+    # Supprimer les champs sensibles si présents (mot de passe, etc.)
+    user.pop("hashed_password", None)
+    
+    # Log pour debug (optionnel)
+    logger.info(f"✅ Connexion réussie - User: {user['name']} - Type: {user.get('user_type', 'N/A')}")
+    
+    # ===== RETOUR : Token JWT + Données utilisateur complètes =====
+    # IMPORTANT : Inclut user_type, name, phone_number, location, etc.
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "user": user  # ← CRITIQUE : Contient toutes les infos dont user_type
+    }
 
 @router.post("/login")
 async def login(request: LoginRequest, db: AsyncIOMotorDatabase = Depends(get_database)):
