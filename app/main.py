@@ -16,6 +16,7 @@ from app.database import mongodb, get_database
 from app.api import test as test_router
 from app.api import blockchain as blockchain_router
 from app.api import auth as auth_router  # <--- AJOUT IMPORTANT
+from app.api import payment as payment_router  # Paiements Moov Money
 
 # Import des modèles pour les autres endpoints restants dans main.py
 from app.models import (
@@ -83,6 +84,7 @@ app.add_middleware(
 app.include_router(test_router.router)
 app.include_router(blockchain_router.router)
 app.include_router(auth_router.router)  # <--- ON BRANCHE L'AUTH ICI
+app.include_router(payment_router.router)  # Paiements Moov Money
 
 # ============================================
 # UTILITAIRES

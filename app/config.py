@@ -30,6 +30,10 @@ class Settings(BaseSettings):
     PRIVATE_KEY: Optional[str] = None
     CHAIN_ID: Optional[int] = 80002
     WEB3_STORAGE_TOKEN: Optional[str] = None
+    
+    # --- Moov Money (Paiements) ---
+    MOOV_API_KEY: str = "test_api_key"  # Clé test par défaut (simulation)
+    MOOV_MERCHANT_ID: str = "merchant_test"  # ID marchand test
 
     # Configuration Pydantic V2
     model_config = SettingsConfigDict(
