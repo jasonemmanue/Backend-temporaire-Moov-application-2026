@@ -1,3 +1,4 @@
+# app/models/product.py
 from pydantic import BaseModel, Field
 from typing import Optional, List
 from datetime import datetime
@@ -15,7 +16,11 @@ class ProductType(str, Enum):
     CORN = "corn"             # Maïs
     VEGETABLE = "vegetable"   # Légumes
     FRUIT = "fruit"           # Fruits
-    OTHER = "other"
+    PLANTAIN = "plantain"     # Banane plantain
+    YAMS = "yams"             # Igname
+    PEANUT = "peanut"         # Arachide
+    COTTON = "cotton"         # Coton
+    OTHER = "other"           # Autre
 
 class ProductStatus(str, Enum):
     AVAILABLE = "available"      # Disponible à la vente
@@ -30,40 +35,48 @@ class QualityGrade(str, Enum):
     ORGANIC = "organic" # Biologique
 
 class ProductBase(BaseModel):
-    name: str = Field(..., min_length=2, max_length=100)
-    product_type: ProductType
-    description: Optional[str] = None
-    quantity: float = Field(..., gt=0)  # en kg
-    unit_price: float = Field(..., gt=0)  # prix par kg
-    location: str  # Lieu de production
-    harvest_date: datetime
-    expiration_date: Optional[datetime] = None
-    quality_grade: QualityGrade = QualityGrade.GRADE_B
-    certification: Optional[str] = None  # Bio, équitable, etc.
-    images: List[str] = []  # URLs des images
+    name: str = Field(..., min_length=2, max_length=100, description="Nom du produit")
+    product_type: ProductType = Field(..., description="Type de produit")
+    description: Optional[str] = Field(None, max_length=500, description="Description du produit")
+    quantity: float = Field(..., gt=0, description="Quantité en kg")
+    unit_price: float = Field(..., gt=0, description="Prix par kg en FCFA")
+    location: str = Field(..., min_length=2, max_length=100, description="Lieu de production")
+    harvest_date: Optional[datetime] = Field(None, description="Date de récolte")
+    quality_grade: Optional[QualityGrade] = Field(QualityGrade.GRADE_B, description="Grade de qualité")
 
 class ProductCreate(ProductBase):
-    owner_id: str  # ID du producteur
+    """Schéma pour créer un nouveau produit"""
+    pass
 
 class ProductUpdate(BaseModel):
-    name: Optional[str] = None
-    description: Optional[str] = None
-    quantity: Optional[float] = None
-    unit_price: Optional[float] = None
+    """Schéma pour mettre à jour un produit (tous les champs optionnels)"""
+    name: Optional[str] = Field(None, min_length=2, max_length=100)
+    description: Optional[str] = Field(None, max_length=500)
+    quantity: Optional[float] = Field(None, gt=0)
+    unit_price: Optional[float] = Field(None, gt=0)
     status: Optional[ProductStatus] = None
     quality_grade: Optional[QualityGrade] = None
 
-class ProductInDB(ProductBase):
-    id: PyObjectId = Field(default_factory=PyObjectId, alias="_id")
+class ProductResponse(BaseModel):
+    """Schéma de réponse pour un produit"""
+    id: str
+    name: str
+    product_type: str
+    description: Optional[str] = None
+    quantity: float
+    unit_price: float
+    location: str
+    harvest_date: Optional[datetime] = None
+    quality_grade: str
     owner_id: str
-    status: ProductStatus = ProductStatus.AVAILABLE
+    owner_name: Optional[str] = None
+    owner_phone: Optional[str] = None
+    status: str
     views: int = 0
     favorite_count: int = 0
-    blockchain_hash: Optional[str] = None  # Hash de la transaction blockchain
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime
+    updated_at: datetime
     
     class Config:
-        populate_by_name = True
-        arbitrary_types_allowed = True
-        json_encoders = {ObjectId: str}
+        from_attributes = True
+        json_encoders = {datetime: lambda v: v.isoformat()}

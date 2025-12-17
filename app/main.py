@@ -15,8 +15,9 @@ from app.database import mongodb, get_database
 # Import des routeurs
 from app.api import test as test_router
 from app.api import blockchain as blockchain_router
-from app.api import auth as auth_router  # <--- AJOUT IMPORTANT
-from app.api import payment as payment_router  # Paiements Moov Money
+from app.api import auth as auth_router
+from app.api import payment as payment_router
+from app.api import products as products_router  # <--- AJOUT IMPORTANT
 
 # Import des modèles pour les autres endpoints restants dans main.py
 from app.models import (
@@ -83,8 +84,9 @@ app.add_middleware(
 # C'est ici qu'on connecte les fichiers séparés
 app.include_router(test_router.router)
 app.include_router(blockchain_router.router)
-app.include_router(auth_router.router)  # <--- ON BRANCHE L'AUTH ICI
-app.include_router(payment_router.router)  # Paiements Moov Money
+app.include_router(auth_router.router)
+app.include_router(payment_router.router)
+app.include_router(products_router.router)  # <--- NOUVEAU: API Produits complète
 
 # ============================================
 # UTILITAIRES
@@ -150,81 +152,6 @@ async def get_users(
     cursor = db.users.find(query).skip(skip).limit(limit)
     users = await cursor.to_list(length=limit)
     return [UserResponse(**serialize_mongo_document(user)) for user in users]
-
-# ============================================
-# ENDPOINTS PRODUITS (Restants)
-# ============================================
-
-@app.post("/api/products", status_code=status.HTTP_201_CREATED, response_model=ProductResponse)
-async def create_product(
-    product: ProductCreate,
-    current_user: dict = Depends(get_current_active_user),
-    db: AsyncIOMotorDatabase = Depends(get_database)
-):
-    """Créer un nouveau produit (authentification requise)"""
-    product_data = {
-        "name": product.name,
-        "product_type": product.product_type.value,
-        "quantity": product.quantity,
-        "price_per_kg": product.price_per_kg,
-        "location": product.location,
-        "description": product.description,
-        "images": product.images,
-        "owner_id": str(current_user["_id"]),
-        "owner_phone": current_user["phone_number"],
-        "owner_name": current_user["name"],
-        "status": ProductStatus.AVAILABLE.value,
-        "created_at": datetime.utcnow(),
-        "updated_at": datetime.utcnow()
-    }
-    
-    result = await db.products.insert_one(product_data)
-    created_product = await db.products.find_one({"_id": result.inserted_id})
-    return ProductResponse(**serialize_mongo_document(created_product))
-
-@app.get("/api/products", response_model=List[ProductResponse])
-async def get_products(
-    product_type: Optional[ProductType] = None,
-    status: Optional[ProductStatus] = None,
-    location: Optional[str] = None,
-    min_price: Optional[float] = None,
-    max_price: Optional[float] = None,
-    limit: int = 50,
-    skip: int = 0,
-    db: AsyncIOMotorDatabase = Depends(get_database)
-):
-    """Lister les produits avec filtres"""
-    query = {}
-    if product_type:
-        query["product_type"] = product_type.value
-    if status:
-        query["status"] = status.value
-    if location:
-        query["location"] = {"$regex": location, "$options": "i"}
-    if min_price is not None or max_price is not None:
-        query["price_per_kg"] = {}
-        if min_price is not None:
-            query["price_per_kg"]["$gte"] = min_price
-        if max_price is not None:
-            query["price_per_kg"]["$lte"] = max_price
-    
-    cursor = db.products.find(query).sort("created_at", -1).skip(skip).limit(limit)
-    products = await cursor.to_list(length=limit)
-    return [ProductResponse(**serialize_mongo_document(product)) for product in products]
-
-@app.get("/api/products/{product_id}", response_model=ProductResponse)
-async def get_product(
-    product_id: str,
-    db: AsyncIOMotorDatabase = Depends(get_database)
-):
-    """Obtenir un produit spécifique"""
-    product = await db.products.find_one({"_id": to_objectid(product_id)})
-    if not product:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Produit non trouvé"
-        )
-    return ProductResponse(**serialize_mongo_document(product))
 
 # ============================================
 # ENDPOINTS SANTÉ ET STATS

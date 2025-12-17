@@ -1,51 +1,30 @@
+# app/services/moov_payment_service.py
 """
-Service de Paiement Moov Money
-Gère les paiements via l'API Moov Money et le stockage des transactions
+Service pour gérer les paiements Moov Money (MODE SIMULATION)
+Gère les transactions, mise à jour des stocks, et création des commandes
 """
-
-import logging
-import uuid
-from datetime import datetime
-from typing import Optional, Dict, List, Any
-from decimal import Decimal
-import requests
-import asyncio
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
-from app.config import settings
-from app.models.transaction import TransactionStatus, PaymentMethod
+from bson import ObjectId
+from datetime import datetime, timedelta
+import random
+import string
+import logging
 
 logger = logging.getLogger(__name__)
 
-
 class MoovPaymentService:
-    """Service pour gérer les paiements Moov Money"""
+    """Service de paiement Moov Money simulé"""
     
-    # Configuration Moov Money
-    MOOV_API_URL = "https://api.moov.io"  # URL de production
-    MOOV_SANDBOX_URL = "https://sandbox.moov.io"  # URL sandbox
+    def generate_transaction_id(self) -> str:
+        """Générer un ID de transaction unique"""
+        timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+        random_part = ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
+        return f"AGRI-{timestamp}-{random_part}"
     
-    # Utiliser sandbox par défaut pour les tests
-    BASE_URL = MOOV_SANDBOX_URL
-    
-    # Codes d'erreur Moov Money
-    MOOV_ERRORS = {
-        "INVALID_MSISDN": "Numéro de téléphone invalide",
-        "INSUFFICIENT_BALANCE": "Solde insuffisant",
-        "TRANSACTION_FAILED": "Échec de la transaction",
-        "INVALID_AMOUNT": "Montant invalide",
-        "MERCHANT_NOT_FOUND": "Commerçant non trouvé",
-        "CUSTOMER_NOT_FOUND": "Client non trouvé",
-    }
-    
-    def __init__(self):
-        """Initialiser le service Moov Money"""
-        self.api_key = settings.MOOV_API_KEY
-        self.merchant_id = settings.MOOV_MERCHANT_ID
-        self.headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json"
-        }
+    def generate_otp(self) -> str:
+        """Générer un code OTP aléatoire (simulation)"""
+        return ''.join(random.choices(string.digits, k=6))
     
     async def initiate_payment(
         self,
@@ -57,126 +36,119 @@ class MoovPaymentService:
         seller_id: str,
         quantity: float,
         unit_price: float,
-        description: str = "Achat de produit AgriSmart"
-    ) -> Dict[str, Any]:
+        description: str = "Achat AgriSmart",
+        delivery_date: str = None,
+        delivery_location: str = None
+    ) -> dict:
         """
         Initier un paiement Moov Money
-        
-        Args:
-            db: Connexion MongoDB
-            buyer_phone: Numéro de téléphone du client (format: +225XXXXXXXXX)
-            amount: Montant en FCFA
-            product_id: ID du produit
-            buyer_id: ID de l'acheteur
-            seller_id: ID du vendeur
-            quantity: Quantité achetée
-            unit_price: Prix unitaire
-            description: Description de la transaction
-            
-        Returns:
-            Dict avec statut et détails de la transaction
         """
         try:
-            # Générer référence unique
-            transaction_ref = f"AGRI-{uuid.uuid4().hex[:12].upper()}"
-            
-            # Valider le montant
-            if amount <= 0:
+            # 1. Vérifier le produit
+            product = await db.products.find_one({"_id": ObjectId(product_id)})
+            if not product:
                 return {
                     "status": "error",
-                    "message": "Montant invalide",
-                    "error_code": "INVALID_AMOUNT"
+                    "message": "Produit non trouvé",
+                    "otp_code": None,  # ← AJOUT
                 }
             
-            # Préparer les données pour Moov Money
-            payment_payload = {
-                "amount": int(amount),  # En centimes
-                "currency": "XOF",  # Franc CFA
-                "customer": {
-                    "phone_number": buyer_phone,
-                    "name": f"Client {buyer_id}"
-                },
-                "description": description,
-                "external_id": transaction_ref,
-                "metadata": {
-                    "product_id": product_id,
-                    "buyer_id": buyer_id,
-                    "seller_id": seller_id,
-                    "quantity": str(quantity),
-                    "unit_price": str(unit_price)
+            # Vérifier le stock disponible
+            if product["quantity"] < quantity:
+                return {
+                    "status": "error",
+                    "message": f"Stock insuffisant. Disponible: {product['quantity']} kg",
+                    "otp_code": None,  # ← AJOUT
                 }
-            }
             
-            # Appeler l'API Moov Money (simulation si en mode test)
-            moov_response = await self._call_moov_api(
-                method="POST",
-                endpoint="/transactions/init",
-                data=payment_payload
-            )
+            # Vérifier que le produit est disponible
+            if product.get("status") != "available":
+                return {
+                    "status": "error",
+                    "message": "Ce produit n'est plus disponible à la vente",
+                    "otp_code": None,  # ← AJOUT
+                }
             
-            # Créer la transaction dans la BD
-            transaction = {
+            # 2. Générer les identifiants de transaction
+            transaction_id = self.generate_transaction_id()
+            otp_code = self.generate_otp()
+            
+            # 3. Calculer la date de livraison par défaut (3 jours ouvrés)
+            if not delivery_date:
+                delivery_date = (datetime.utcnow() + timedelta(days=3)).isoformat()
+            
+            if not delivery_location:
+                delivery_location = product.get("location", "À définir")
+            
+            # 4. Créer la transaction
+            transaction_data = {
+                "transaction_id": transaction_id,
                 "product_id": product_id,
-                "seller_id": seller_id,
+                "product_name": product["name"],
                 "buyer_id": buyer_id,
+                "seller_id": seller_id,
+                "seller_phone": product.get("owner_phone"),
+                "buyer_phone": buyer_phone,
                 "quantity": quantity,
                 "unit_price": unit_price,
                 "total_amount": amount,
-                "payment_method": PaymentMethod.MOOV_MONEY,
-                "status": TransactionStatus.PENDING,
-                "transaction_id": transaction_ref,
-                "payment_reference": moov_response.get("transaction_id", ""),
-                "moov_status": moov_response.get("status", "pending"),
-                "buyer_phone": buyer_phone,
+                "status": "pending",
+                "payment_method": "moov_money",
+                "payment_reference": None,
+                "moov_status": "pending",
+                "otp_code": otp_code,
+                "delivery_date": delivery_date,
+                "delivery_location": delivery_location,
                 "created_at": datetime.utcnow(),
-                "updated_at": datetime.utcnow()
+                "updated_at": datetime.utcnow(),
             }
             
-            # Stocker dans MongoDB
-            result = await db["transactions"].insert_one(transaction)
-            transaction["_id"] = str(result.inserted_id)
+            result = await db.transactions.insert_one(transaction_data)
             
-            logger.info(f"✅ Transaction initiée: {transaction_ref}")
+            logger.info(f"💳 Transaction créée: {transaction_id} - Montant: {amount} FCFA")
+            logger.info(f"🔢 CODE OTP (DEV): {otp_code}")
             
+            # ← CORRECTION: TOUJOURS retourner otp_code
             return {
                 "status": "success",
                 "message": "Paiement initié avec succès",
-                "transaction_id": transaction_ref,
+                "transaction_id": transaction_id,
                 "transaction_db_id": str(result.inserted_id),
                 "amount": amount,
-                "moov_response": moov_response
+                "otp_code": otp_code,  # ← TOUJOURS PRÉSENT
+                "buyer_phone": buyer_phone,
+                "seller_name": product.get("owner_name"),
+                "product_name": product["name"],
+                "delivery_date": delivery_date,
+                "delivery_location": delivery_location,
+                "error_code": None,  # ← AJOUT pour compatibilité
+                "moov_response": {
+                    "status": "pending",
+                    "message": "Entrez le code OTP pour confirmer le paiement"
+                }
             }
             
         except Exception as e:
-            logger.error(f"❌ Erreur lors de l'initiation du paiement: {str(e)}")
+            logger.error(f"❌ Erreur initiation paiement: {str(e)}")
             return {
                 "status": "error",
-                "message": f"Erreur: {str(e)}",
-                "error_code": "PAYMENT_INITIATION_FAILED"
+                "message": f"Erreur lors de l'initiation: {str(e)}",
+                "otp_code": None,  # ← AJOUT
+                "error_code": "INIT_ERROR",  # ← AJOUT
             }
     
     async def confirm_payment(
         self,
         db: AsyncIOMotorDatabase,
         transaction_id: str,
-        otp_code: Optional[str] = None
-    ) -> Dict[str, Any]:
+        otp_code: str = None
+    ) -> dict:
         """
-        Confirmer le paiement avec OTP
-        
-        Args:
-            db: Connexion MongoDB
-            transaction_id: ID de la transaction
-            otp_code: Code OTP (optionnel, simulation)
-            
-        Returns:
-            Dict avec statut de confirmation
+        Confirmer un paiement avec le code OTP
         """
         try:
-            # Récupérer la transaction
-            transaction = await db["transactions"].find_one(
-                {"transaction_id": transaction_id}
-            )
+            # 1. Récupérer la transaction
+            transaction = await db.transactions.find_one({"transaction_id": transaction_id})
             
             if not transaction:
                 return {
@@ -184,67 +156,114 @@ class MoovPaymentService:
                     "message": "Transaction non trouvée"
                 }
             
-            # Appeler Moov Money pour confirmer
-            confirm_payload = {
-                "otp": otp_code or "123456",  # En simulation
-                "transaction_id": transaction_id
-            }
+            # Vérifier que la transaction est en attente
+            if transaction["status"] != "pending":
+                return {
+                    "status": "error",
+                    "message": f"Transaction déjà {transaction['status']}"
+                }
             
-            moov_response = await self._call_moov_api(
-                method="POST",
-                endpoint="/transactions/confirm",
-                data=confirm_payload
-            )
+            # 2. Vérifier l'OTP (en mode simulation, on peut accepter "123456")
+            stored_otp = transaction.get("otp_code")
+            if otp_code and otp_code != stored_otp and otp_code != "123456":
+                return {
+                    "status": "error",
+                    "message": "Code OTP invalide"
+                }
             
-            # Mettre à jour la transaction
-            new_status = TransactionStatus.PAID if moov_response.get("status") == "success" else TransactionStatus.PENDING
+            # 3. Mettre à jour le stock du produit
+            product = await db.products.find_one({"_id": ObjectId(transaction["product_id"])})
             
-            await db["transactions"].update_one(
-                {"transaction_id": transaction_id},
+            if not product:
+                return {
+                    "status": "error",
+                    "message": "Produit non trouvé"
+                }
+            
+            new_quantity = product["quantity"] - transaction["quantity"]
+            
+            # Si le stock tombe à 0, marquer comme vendu
+            new_status = "sold" if new_quantity <= 0 else "available"
+            
+            await db.products.update_one(
+                {"_id": ObjectId(transaction["product_id"])},
                 {
                     "$set": {
+                        "quantity": new_quantity,
                         "status": new_status,
-                        "moov_status": moov_response.get("status", "pending"),
                         "updated_at": datetime.utcnow()
                     }
                 }
             )
             
+            # 4. Mettre à jour la transaction
+            payment_reference = f"MOOV-{self.generate_transaction_id()}"
+            
+            await db.transactions.update_one(
+                {"transaction_id": transaction_id},
+                {
+                    "$set": {
+                        "status": "paid",
+                        "moov_status": "success",
+                        "payment_reference": payment_reference,
+                        "confirmed_at": datetime.utcnow(),
+                        "updated_at": datetime.utcnow()
+                    },
+                    "$unset": {"otp_code": ""}
+                }
+            )
+            
+            # 5. Créer l'enregistrement d'achat pour l'acheteur
+            purchase_data = {
+                "transaction_id": transaction_id,
+                "buyer_id": transaction["buyer_id"],
+                "product_id": transaction["product_id"],
+                "product_name": transaction["product_name"],
+                "seller_id": transaction["seller_id"],
+                "quantity": transaction["quantity"],
+                "unit_price": transaction["unit_price"],
+                "total_paid": transaction["total_amount"],
+                "delivery_date": transaction.get("delivery_date"),
+                "delivery_location": transaction.get("delivery_location"),
+                "delivery_status": "pending",
+                "created_at": datetime.utcnow()
+            }
+            
+            await db.purchases.insert_one(purchase_data)
+            
             logger.info(f"✅ Paiement confirmé: {transaction_id}")
+            logger.info(f"📦 Stock mis à jour: {product['name']} - Nouveau stock: {new_quantity} kg")
             
             return {
-                "status": "success" if new_status == TransactionStatus.PAID else "pending",
-                "message": "Paiement confirmé" if new_status == TransactionStatus.PAID else "Confirmation en attente",
+                "status": "success",
+                "message": "Paiement confirmé avec succès",
                 "transaction_id": transaction_id,
-                "payment_status": new_status
+                "payment_reference": payment_reference,
+                "amount": transaction["total_amount"],
+                "new_product_stock": new_quantity,
+                "delivery_date": transaction.get("delivery_date"),
+                "delivery_location": transaction.get("delivery_location"),
+                "moov_response": {
+                    "status": "success",
+                    "reference": payment_reference
+                }
             }
             
         except Exception as e:
-            logger.error(f"❌ Erreur lors de la confirmation: {str(e)}")
+            logger.error(f"❌ Erreur confirmation paiement: {str(e)}")
             return {
                 "status": "error",
-                "message": f"Erreur: {str(e)}"
+                "message": f"Erreur lors de la confirmation: {str(e)}"
             }
     
     async def get_transaction_status(
         self,
         db: AsyncIOMotorDatabase,
         transaction_id: str
-    ) -> Dict[str, Any]:
-        """
-        Obtenir le statut d'une transaction
-        
-        Args:
-            db: Connexion MongoDB
-            transaction_id: ID de la transaction
-            
-        Returns:
-            Dict avec les détails de la transaction
-        """
+    ) -> dict:
+        """Récupérer le statut d'une transaction"""
         try:
-            transaction = await db["transactions"].find_one(
-                {"transaction_id": transaction_id}
-            )
+            transaction = await db.transactions.find_one({"transaction_id": transaction_id})
             
             if not transaction:
                 return {
@@ -252,10 +271,7 @@ class MoovPaymentService:
                     "message": "Transaction non trouvée"
                 }
             
-            # Convertir ObjectId en string
             transaction["_id"] = str(transaction["_id"])
-            transaction["created_at"] = transaction["created_at"].isoformat()
-            transaction["updated_at"] = transaction["updated_at"].isoformat()
             
             return {
                 "status": "success",
@@ -263,10 +279,10 @@ class MoovPaymentService:
             }
             
         except Exception as e:
-            logger.error(f"❌ Erreur lors de la récupération du statut: {str(e)}")
+            logger.error(f"❌ Erreur récupération statut: {str(e)}")
             return {
                 "status": "error",
-                "message": f"Erreur: {str(e)}"
+                "message": str(e)
             }
     
     async def get_user_transactions(
@@ -275,27 +291,18 @@ class MoovPaymentService:
         user_id: str,
         role: str = "buyer",
         limit: int = 50
-    ) -> Dict[str, Any]:
-        """
-        Obtenir l'historique des transactions d'un utilisateur
-        
-        Args:
-            db: Connexion MongoDB
-            user_id: ID de l'utilisateur
-            role: "buyer" ou "seller"
-            limit: Nombre maximum de transactions
-            
-        Returns:
-            Liste des transactions
-        """
+    ) -> dict:
+        """Récupérer l'historique des transactions d'un utilisateur"""
         try:
-            query_field = "buyer_id" if role == "buyer" else "seller_id"
+            query = {}
+            if role == "buyer":
+                query["buyer_id"] = user_id
+            elif role == "seller":
+                query["seller_id"] = user_id
             
-            transactions = await db["transactions"].find(
-                {query_field: user_id}
-            ).sort("created_at", -1).limit(limit).to_list(None)
+            cursor = db.transactions.find(query).sort("created_at", -1).limit(limit)
+            transactions = await cursor.to_list(length=limit)
             
-            # Convertir ObjectId en string
             for trans in transactions:
                 trans["_id"] = str(trans["_id"])
                 trans["created_at"] = trans["created_at"].isoformat()
@@ -308,10 +315,38 @@ class MoovPaymentService:
             }
             
         except Exception as e:
-            logger.error(f"❌ Erreur lors de la récupération des transactions: {str(e)}")
+            logger.error(f"❌ Erreur récupération historique: {str(e)}")
             return {
                 "status": "error",
-                "message": f"Erreur: {str(e)}"
+                "message": str(e)
+            }
+    
+    async def get_user_purchases(
+        self,
+        db: AsyncIOMotorDatabase,
+        buyer_id: str,
+        limit: int = 50
+    ) -> dict:
+        """Récupérer les achats d'un utilisateur"""
+        try:
+            cursor = db.purchases.find({"buyer_id": buyer_id}).sort("created_at", -1).limit(limit)
+            purchases = await cursor.to_list(length=limit)
+            
+            for purchase in purchases:
+                purchase["_id"] = str(purchase["_id"])
+                purchase["created_at"] = purchase["created_at"].isoformat()
+            
+            return {
+                "status": "success",
+                "count": len(purchases),
+                "purchases": purchases
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ Erreur récupération achats: {str(e)}")
+            return {
+                "status": "error",
+                "message": str(e)
             }
     
     async def get_payment_summary(
@@ -319,68 +354,48 @@ class MoovPaymentService:
         db: AsyncIOMotorDatabase,
         user_id: str,
         role: str = "buyer"
-    ) -> Dict[str, Any]:
-        """
-        Obtenir un résumé des paiements
-        
-        Args:
-            db: Connexion MongoDB
-            user_id: ID de l'utilisateur
-            role: "buyer" ou "seller"
-            
-        Returns:
-            Résumé avec statistiques
-        """
+    ) -> dict:
+        """Obtenir un résumé des paiements"""
         try:
-            query_field = "buyer_id" if role == "buyer" else "seller_id"
+            query = {"buyer_id": user_id} if role == "buyer" else {"seller_id": user_id}
             
-            # Pipeline d'agrégation
             pipeline = [
-                {
-                    "$match": {query_field: user_id}
-                },
+                {"$match": query},
                 {
                     "$group": {
                         "_id": "$status",
                         "count": {"$sum": 1},
-                        "total_amount": {"$sum": "$total_amount"},
-                        "avg_amount": {"$avg": "$total_amount"}
+                        "total": {"$sum": "$total_amount"},
+                        "average": {"$avg": "$total_amount"}
                     }
                 }
             ]
             
-            stats = await db["transactions"].aggregate(pipeline).to_list(None)
+            stats = await db.transactions.aggregate(pipeline).to_list(None)
             
-            # Formater les résultats
-            summary = {
-                "total_transactions": 0,
-                "total_amount": 0,
-                "by_status": {}
-            }
+            total_count = sum(s["count"] for s in stats)
+            total_amount = sum(s["total"] for s in stats)
             
+            by_status = {}
             for stat in stats:
-                status = stat["_id"]
-                count = stat["count"]
-                total = stat["total_amount"]
-                
-                summary["total_transactions"] += count
-                summary["total_amount"] += total
-                summary["by_status"][status] = {
-                    "count": count,
-                    "total": total,
-                    "average": stat["avg_amount"]
+                by_status[stat["_id"]] = {
+                    "count": stat["count"],
+                    "total": stat["total"],
+                    "average": stat["average"]
                 }
             
             return {
                 "status": "success",
-                "summary": summary
+                "total_transactions": total_count,
+                "total_amount": total_amount,
+                "by_status": by_status
             }
             
         except Exception as e:
-            logger.error(f"❌ Erreur lors du calcul du résumé: {str(e)}")
+            logger.error(f"❌ Erreur calcul résumé: {str(e)}")
             return {
                 "status": "error",
-                "message": f"Erreur: {str(e)}"
+                "message": str(e)
             }
     
     async def refund_payment(
@@ -388,53 +403,30 @@ class MoovPaymentService:
         db: AsyncIOMotorDatabase,
         transaction_id: str,
         reason: str = "Remboursement demandé"
-    ) -> Dict[str, Any]:
-        """
-        Effectuer un remboursement
-        
-        Args:
-            db: Connexion MongoDB
-            transaction_id: ID de la transaction à rembourser
-            reason: Raison du remboursement
-            
-        Returns:
-            Statut du remboursement
-        """
+    ) -> dict:
+        """Effectuer un remboursement (remettre le stock)"""
         try:
-            transaction = await db["transactions"].find_one(
-                {"transaction_id": transaction_id}
-            )
+            transaction = await db.transactions.find_one({"transaction_id": transaction_id})
             
             if not transaction:
-                return {
-                    "status": "error",
-                    "message": "Transaction non trouvée"
+                return {"status": "error", "message": "Transaction non trouvée"}
+            
+            if transaction["status"] != "paid":
+                return {"status": "error", "message": "Seules les transactions payées peuvent être remboursées"}
+            
+            await db.products.update_one(
+                {"_id": ObjectId(transaction["product_id"])},
+                {
+                    "$inc": {"quantity": transaction["quantity"]},
+                    "$set": {"status": "available", "updated_at": datetime.utcnow()}
                 }
-            
-            if transaction["status"] != TransactionStatus.PAID:
-                return {
-                    "status": "error",
-                    "message": "Seules les transactions payées peuvent être remboursées"
-                }
-            
-            # Appeler Moov Money pour le remboursement
-            refund_payload = {
-                "transaction_id": transaction_id,
-                "reason": reason
-            }
-            
-            moov_response = await self._call_moov_api(
-                method="POST",
-                endpoint="/transactions/refund",
-                data=refund_payload
             )
             
-            # Mettre à jour la transaction
-            await db["transactions"].update_one(
+            await db.transactions.update_one(
                 {"transaction_id": transaction_id},
                 {
                     "$set": {
-                        "status": TransactionStatus.CANCELLED,
+                        "status": "refunded",
                         "refund_reason": reason,
                         "refunded_at": datetime.utcnow(),
                         "updated_at": datetime.utcnow()
@@ -442,216 +434,15 @@ class MoovPaymentService:
                 }
             )
             
-            logger.info(f"✅ Remboursement effectué: {transaction_id}")
+            logger.info(f"💰 Remboursement effectué: {transaction_id}")
             
             return {
                 "status": "success",
                 "message": "Remboursement effectué avec succès",
                 "transaction_id": transaction_id,
-                "refund_amount": transaction["total_amount"]
+                "refunded_amount": transaction["total_amount"]
             }
             
         except Exception as e:
-            logger.error(f"❌ Erreur lors du remboursement: {str(e)}")
-            return {
-                "status": "error",
-                "message": f"Erreur: {str(e)}"
-            }
-    
-    async def _call_moov_api(
-        self,
-        method: str,
-        endpoint: str,
-        data: Optional[Dict] = None
-    ) -> Dict[str, Any]:
-        """
-        Effectuer un appel à l'API Moov Money
-        
-        **NOTE: Cette implémentation utilise une SIMULATION réaliste**
-        car l'API Moov Money n'est pas directement accessible en sandbox.
-        En production, remplacer par appels réels à https://api.moov.io
-        
-        Args:
-            method: GET, POST, etc.
-            endpoint: Endpoint de l'API
-            data: Données à envoyer
-            
-        Returns:
-            Réponse de l'API (simulée ou réelle)
-        """
-        try:
-            # ⚠️ SIMULATION MODE (par défaut) ⚠️
-            # En production, configurer settings.moov_api_key avec clé réelle
-            logger.info(f"📡 [SIMULATION] Appel API Moov: {method} {endpoint}")
-            
-            # Vérifier si on est en mode réel (clé API valide)
-            is_real_mode = (
-                self.api_key 
-                and self.api_key != "test_api_key"
-                and not self.api_key.startswith("sk_test_")
-            )
-            
-            if not is_real_mode:
-                # Mode simulation (développement/test)
-                logger.info(f"🎭 Mode SIMULATION activé")
-                return self._simulate_moov_response(method, endpoint, data)
-            
-            # Mode réel - appel à l'API Moov Money
-            url = f"{self.BASE_URL}{endpoint}"
-            logger.info(f"🌐 Mode RÉEL - Appel: {url}")
-            
-            if method == "POST":
-                response = requests.post(
-                    url,
-                    json=data,
-                    headers=self.headers,
-                    timeout=30
-                )
-            elif method == "GET":
-                response = requests.get(
-                    url,
-                    headers=self.headers,
-                    timeout=30
-                )
-            else:
-                return {"status": "error", "message": "Méthode non supportée"}
-            
-            if response.status_code in [200, 201]:
-                return response.json()
-            else:
-                return {
-                    "status": "error",
-                    "message": response.text,
-                    "code": response.status_code
-                }
-                
-        except Exception as e:
-            logger.error(f"❌ Erreur API Moov: {str(e)}")
-            # Fallback: retourner simulation en cas d'erreur
-            return self._simulate_moov_response(method, endpoint, data)
-    
-    def _simulate_moov_response(
-        self,
-        method: str,
-        endpoint: str,
-        data: Optional[Dict] = None
-    ) -> Dict[str, Any]:
-        """
-        Simuler une réponse Moov Money (simulation réaliste)
-        
-        Cette simulation reproduit le comportement réel de l'API Moov Money:
-        - Délais de traitement
-        - Format des réponses
-        - Codes d'erreur
-        - Métadonnées réalistes
-        
-        Args:
-            method: Méthode HTTP
-            endpoint: Endpoint
-            data: Données
-            
-        Returns:
-            Réponse simulée (identique au format réel)
-        """
-        import time
-        import random
-        
-        # Simuler un léger délai réseau (50-200ms)
-        time.sleep(random.uniform(0.05, 0.2))
-        
-        if endpoint == "/transactions/init":
-            # Simulation initiation paiement
-            customer_phone = data.get("customer", {}).get("phone_number", "")
-            amount = data.get("amount", 0)
-            
-            # Valider le numéro de téléphone
-            if not customer_phone.startswith("+225"):
-                logger.warning(f"⚠️  Numéro invalide: {customer_phone}")
-                return {
-                    "status": "error",
-                    "error_code": "INVALID_MSISDN",
-                    "message": "Numéro de téléphone invalide. Format attendu: +225XXXXXXXXX"
-                }
-            
-            # Valider le montant
-            if amount <= 0 or amount > 10000000:  # Max 10M FCFA
-                return {
-                    "status": "error",
-                    "error_code": "INVALID_AMOUNT",
-                    "message": f"Montant invalide: {amount}. Min: 100 FCFA, Max: 10M FCFA"
-                }
-            
-            # Simulation réussie
-            moov_transaction_id = f"TXN-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:8].upper()}"
-            
-            return {
-                "status": "pending",
-                "transaction_id": moov_transaction_id,
-                "amount": amount,
-                "currency": data.get("currency", "XOF"),
-                "customer": {
-                    "phone_number": customer_phone,
-                    "name": data.get("customer", {}).get("name", "Customer")
-                },
-                "description": data.get("description", ""),
-                "external_id": data.get("external_id", ""),
-                "created_at": datetime.utcnow().isoformat(),
-                "expires_at": (datetime.utcnow().timestamp() + 900).__str__(),  # 15 min expiry
-                "customer_message": f"Un code OTP a été envoyé au {customer_phone}",
-                "merchant_reference": uuid.uuid4().hex[:12].upper(),
-                "request_id": uuid.uuid4().hex
-            }
-        
-        elif endpoint == "/transactions/confirm":
-            # Simulation confirmation avec OTP
-            transaction_id = data.get("transaction_id", "")
-            otp = data.get("otp", "")
-            
-            # Simuler une vérification OTP
-            # 90% de chance de succès
-            is_success = random.random() < 0.90
-            
-            if not is_success:
-                return {
-                    "status": "error",
-                    "error_code": "INVALID_OTP",
-                    "message": "Code OTP invalide ou expiré",
-                    "transaction_id": transaction_id,
-                    "attempts_remaining": random.randint(1, 3)
-                }
-            
-            return {
-                "status": "success",
-                "transaction_id": transaction_id,
-                "message": "Paiement confirmé et approuvé",
-                "confirmation_id": f"CONF-{uuid.uuid4().hex[:12].upper()}",
-                "confirmed_at": datetime.utcnow().isoformat(),
-                "balance_before": random.randint(5000, 500000),
-                "balance_after": random.randint(5000, 500000),
-                "receipt_number": f"RCP-{uuid.uuid4().hex[:8].upper()}",
-                "settlement_expected": (datetime.utcnow().timestamp() + 86400).__str__()  # Demain
-            }
-        
-        elif endpoint == "/transactions/refund":
-            # Simulation remboursement
-            transaction_id = data.get("transaction_id", "")
-            reason = data.get("reason", "")
-            
-            return {
-                "status": "success",
-                "transaction_id": transaction_id,
-                "refund_id": f"RFD-{uuid.uuid4().hex[:12].upper()}",
-                "refunded_at": datetime.utcnow().isoformat(),
-                "reason": reason,
-                "message": "Remboursement initié. L'argent sera retourné en 1-3 jours ouvrables",
-                "expected_date": (datetime.utcnow().timestamp() + 259200).__str__()  # +3 jours
-            }
-        
-        else:
-            # Réponse par défaut
-            return {
-                "status": "pending",
-                "message": f"Simulation pour {endpoint}",
-                "request_id": uuid.uuid4().hex,
-                "timestamp": datetime.utcnow().isoformat()
-            }
+            logger.error(f"❌ Erreur remboursement: {str(e)}")
+            return {"status": "error", "message": str(e)}
